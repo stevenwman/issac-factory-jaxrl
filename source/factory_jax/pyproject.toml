@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "factory_jax"
+version = "0.1.0"
+description = "Factory NutThread task re-registration + JAX bridge utilities"
+requires-python = ">=3.11,<3.12"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["factory_jax*"]
