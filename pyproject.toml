@@ -3,7 +3,10 @@ name = "isaaclab-factory-jax"
 version = "0.1.0"
 description = "IsaacLab Factory NutThread RL baseline with jax-learning algos"
 requires-python = ">=3.11,<3.12"
-dependencies = []
+dependencies = [
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
