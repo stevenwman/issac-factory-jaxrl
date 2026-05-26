@@ -46,6 +46,12 @@ Self-contained pass/fail. No external baseline lookup. No matched config. No com
 | D10 | Seed: 0. Single training run. | MVP discipline |
 | D11 | Wandb on. Project `isaaclab-factory-jax`, entity `sman2`, name `m5a-jax-ppo-mvp-<timestamp>`. jax-learning's `train_ppo.py` already does wandb plumbing — pass `use_wandb=True`. | Parent spec wandb conventions |
 | D12 | Future upstream: when jax-learning maintainer adds an official isaaclab backend, deprecate our `backend.py`. Until then, ours is the only one. | Long-term hygiene |
+| D13 | **GPU memory contention:** set `XLA_PYTHON_CLIENT_PREALLOCATE=false` (or `XLA_PYTHON_CLIENT_MEM_FRACTION=0.3`) in our wrapper script env, BEFORE any jax import. jax otherwise grabs 75% of GPU memory at first use, leaving Isaac OOMing during sim build. Runtime config knobs to dial down memory if pressure surfaces: drop `num_envs`, drop `minibatch_size`, drop `num_steps` (rollout horizon). | RTX 5080 has 16 GB; Isaac wants ~6 GB; preallocated jax would grab ~12 GB → OOM. |
+| D14 | **Action clipping**: set `clip_actions=1.0` in the bundle (rl_games convention; matches Isaac Factory's expectation). Factory's `action_space` is `Box(-inf, inf, (N, 6))` so the env itself doesn't clip; the algo must. Applies to **PPO AND any future algo** (FlashSAC, etc.) — bundle is algo-agnostic. Implementation: in the bundle's `env_step` closure, `action = jnp.clip(action, -1.0, 1.0)` before `from_jax`. | Per Factory paper's controller assumption + rl_games config (`clip_actions: 1.0`). |
+| D15 | **TrainConfig construction stop-gap**: copy the closest jax-learning preset (e.g. `get_preset("CheetahRun")` or `get_preset("default_manipulation")` if it exists) into our wrapper, override `env_name=`, `num_envs=`, and any IsaacLab-specific fields. We do NOT add a new `IsaacLab/...` preset to jax-learning's `env_presets.py` for MVP — that's a branch-and-merge dance. Hardcode in our wrapper for now; promote to a real preset later. | Lightweight-scope memory + spec D11. |
+| D16 | **Eval disabled for MVP**: Isaac convention is to NOT run in-process eval (SimulationApp singleton blocks two kits). jax-learning's `train_ppo.train()` calls `evaluate_gym` periodically. Two options to disable: (a) set `cfg.eval_interval = inf` (if cfg supports it), (b) patch `train_ppo.train` on jax-learning branch `isaaclab-factory-jax/m5a-skip-eval` to skip eval when `backend_kind == "isaaclab"`. We prefer (a) at planning time; fall back to (b) if cfg has no eval-disable knob. After training, run `scripts/play_jax_ppo.py` (a separate Isaac process) for eval. | Spec D11 + Isaac kit-process constraint (kvdb lock observed during M2). |
+| D17 | **simulation_app cleanup**: wrapper script uses `try / finally: simulation_app.close()` so Isaac kit shuts down cleanly even if training crashes mid-iter. | Avoids zombie procs holding GPU memory. |
+| D18 | **Obs normalization handling**: jax-learning's `train_ppo.train()` does obs normalization inline (`norm_init` / `norm_normalize` / `norm_update`, train_ppo.py:153-207). It's hardcoded — not a cfg toggle. **We accept this as a feature** — Factory obs have varying dynamic ranges, normalization should help. We don't have to plumb anything. Note: norm_state is saved on checkpoint via `load_checkpoint` (line 160). | Verified by reading train_ppo.py. |
 
 ## 5. Architecture
 
@@ -110,15 +116,17 @@ register_backend("isaaclab", make_isaaclab_bundle)
 ### `scripts/train_jax_ppo.py` (the wrapper)
 
 ```python
+# 0. ENV: set XLA_PYTHON_CLIENT_PREALLOCATE=false (D13) — BEFORE importing jax
 # 1. argparse + AppLauncher boot
 # 2. sys.path.insert for jax-learning
 # 3. import factory_jax.tasks    # gym.register
 # 4. import factory_jax.backend  # register_backend("isaaclab", ...)
-# 5. Build TrainConfig with env_name="IsaacLab/FactoryJax-NutThread-v0"
-# 6. Call jax_rl.scripts.train_ppo.train(cfg, seed, use_wandb=True)
+# 5. Build TrainConfig (D15 stop-gap: copy a preset, override env_name + num_envs + eval_interval=inf per D16)
+# 6. try: jax_rl.scripts.train_ppo.train(cfg, seed, use_wandb=True)
+#    finally: simulation_app.close()  (D17)
 ```
 
-Total: ~40 lines, no training logic of our own.
+Total: ~50 lines, no training logic of our own.
 
 ## 6. Data flow
 
@@ -135,6 +143,10 @@ Identical to jax-learning's existing PPO flow. The bundle's `env_step` is the on
 | R5 | Reward doesn't rise | Investigate: (a) inspect rollouts (b) try obs norm in jax-learning's cfg (c) lower lr (d) check that action is being fed correctly through bridge |
 | R6 | Isaac OOM with num_envs=64 + jax memory on same GPU | Drop to 32, document |
 | R7 | jax-learning may import a non-existent module at top of `train_ppo.py` (e.g. `mujoco_playground`) that we don't have | uv add the missing dep, or stub-out the import — minor friction |
+| R8 | jax + Isaac OOM on shared GPU (jax preallocates 75%) | **D13 mitigates** — set `XLA_PYTHON_CLIENT_PREALLOCATE=false` env var in wrapper. If still tight: drop num_envs, drop minibatch_size, drop num_steps. |
+| R9 | Policy emits unbounded actions, Isaac doesn't clip, exploration diverges | **D14 mitigates** — `jnp.clip(action, -1, 1)` in bundle's env_step closure. |
+| R10 | TrainConfig has fields we can't fill from a preset (Playground-specific) | **D15 stop-gap** — hardcode minimal cfg in wrapper; promote to real preset later. |
+| R11 | jax-learning's hardcoded periodic eval resets our env mid-training and corrupts rollout state | **D16 mitigates** — disable eval via cfg if possible, else branch-patch. |
 
 ## 8. Verification checkpoints
 
@@ -152,6 +164,8 @@ Identical to jax-learning's existing PPO flow. The bundle's `env_step` is the on
 - **Q1 (blocking):** What is `EnvBundle.env_step`'s exact signature expected by `onpolicy_collect`? (state, action) → ? Need to read `jax_rl/training/onpolicy_collect.py` for the iteration loop. Determines whether we return 5-tuple, dict, etc.
 - **Q2 (blocking):** What's `jax_rl.scripts.train_ppo.train()`'s signature? Need to call it correctly from our wrapper. Read the signature + figure out which args we need to pass (cfg, seed, use_wandb=True/False, wandb_project=..., etc.).
 - **Q3 (non-blocking):** Does jax-learning's `train_ppo.train()` import anything Playground-specific at module-load time (e.g. `mujoco_playground` registry queries)? If yes, may need a stub or uv-installed dep. Resolve empirically by running the wrapper script.
+- **Q4 (blocking — D16):** Does `TrainConfig` expose an `eval_interval` (or `eval_every`, etc.) knob that can be set to `inf` / `0` to disable in-process eval? If not, escalate to D16 path (b) — patch `train_ppo.train` on a jax-learning branch. Read `jax_rl/configs/train_config.py`.
+- **Q5 (blocking — D15):** Which preset in `jax_rl/configs/env_presets.py` is closest to a manipulation env with the right network sizes / lr / gamma? E.g. CheetahRun (locomotion, MLP), AnymalCFlat (locomotion), or there's a manipulation preset. Pick the most appropriate as MVP starting point; override env_name + num_envs.
 
 ## 10. Out-of-scope follow-ups
 
