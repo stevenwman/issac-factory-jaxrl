@@ -7,6 +7,11 @@ dependencies = [
     "isaacsim==5.1.0",
     "torch==2.7.0",
     "torchvision==0.22.0",
+    "isaaclab",
+    "isaaclab_assets",
+    "isaaclab_rl",
+    "isaaclab_tasks",
+    "isaaclab_mimic",
 ]
 
 [[tool.uv.index]]
@@ -20,6 +25,24 @@ url = "https://pypi.nvidia.com"
 explicit = true
 
 [tool.uv.sources]
-torch       = { index = "pytorch-cu128" }
-torchvision = { index = "pytorch-cu128" }
-isaacsim    = { index = "nvidia" }
+torch           = { index = "pytorch-cu128" }
+torchvision     = { index = "pytorch-cu128" }
+isaacsim        = { index = "nvidia" }
+isaaclab        = { path = "/home/stevenman/Desktop/Work/IsaacLab/source/isaaclab", editable = true }
+isaaclab_assets = { path = "/home/stevenman/Desktop/Work/IsaacLab/source/isaaclab_assets", editable = true }
+isaaclab_rl     = { path = "/home/stevenman/Desktop/Work/IsaacLab/source/isaaclab_rl", editable = true }
+isaaclab_tasks  = { path = "/home/stevenman/Desktop/Work/IsaacLab/source/isaaclab_tasks", editable = true }
+isaaclab_mimic  = { path = "/home/stevenman/Desktop/Work/IsaacLab/source/isaaclab_mimic", editable = true }
+
+[tool.uv]
+# IsaacLab v2.3.2 setup.py pins starlette==0.49.1 (commit 64ecea24f51b, Dec 2025,
+# CVE mitigation) but isaacsim 5.1.0's fastapi==0.115.7 requires starlette<0.46.0.
+# Override to satisfy isaacsim. CVE is web-framework specific, low risk for RL training.
+#
+# IsaacLab pins flatdict==4.0.1 which ships only sdist; its setup.py imports
+# pkg_resources (removed in setuptools >= 70). flatdict 4.1.0 has a binary wheel and
+# is API-compatible, so override to skip the build entirely.
+override-dependencies = [
+    "starlette<0.46.0",
+    "flatdict>=4.1.0",
+]
