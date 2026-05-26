@@ -1,3 +1,20 @@
 .venv/
-__pycache__/
+**/__pycache__/
 *.pyc
+*.egg-info/
+dist/
+build/
+
+# RL artifacts
+videos/
+runs/
+logs/
+wandb/
+checkpoints/
+*.mp4
+*.pth
+*.ckpt
+
+# editor / misc
+.ipynb_checkpoints/
+.DS_Store

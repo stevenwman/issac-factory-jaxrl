@@ -29,27 +29,27 @@
 
 Spec (§ multiple) and plan referenced `single_observation_space=(21,)` based on an older grep of `factory_env_cfg.py`. Actual current value is **19** (policy obs), **43** (critic obs). Update spec / plan when next touched. Functionally harmless — wrapper is shape-agnostic.
 
-## Video / rendering — BLOCKED with RTX 5080 + Isaac Sim 5.1
+## Video / rendering — RESOLVED via driver downgrade
 
-Attempting to enable cameras (`AppLauncher.enable_cameras=True` + `gym.make(..., render_mode="rgb_array")` + `gym.wrappers.RecordVideo`) crashes the kit subprocess with a SIGSEGV in `librtx.scenedb.plugin.so` during `omni::usd::UsdManager::createHydraEngine`. Stack trace logged to `~/isaacsim/kit/data/Kit/Isaac-Sim/5.1/<uuid>.dmp` and to `/tmp/m1_run.log`.
+**Initial state (driver 595.71.05):** RTX renderer SIGSEGV in `librtx.scenedb.plugin.so` during `omni::usd::UsdManager::createHydraEngine`. Root cause = NVIDIA driver 595.x regression on Blackwell GPUs (RTX 5080). Isaac Sim 5.1's spec minimum driver is 580.65.06.
 
-Likely root cause: Isaac Sim 5.1's bundled RTX raytracer plugin not yet validated on Blackwell-generation GPUs (RTX 5080 architecture is newer than Isaac Sim 5.1's release). Driver 595.71.05 supports CUDA 13.2, but the renderer crashes regardless of CUDA path.
+**Fix:** downgraded driver to `nvidia-driver-580-open` (apt-pulled `580.159.03`). Reboot. Verified via `nvidia-smi`.
 
-**Workaround paths (decide before M5b at the latest):**
+**Post-fix verification:**
+- Re-ran sanity script with `--record_video`. No crash.
+- Video written: `videos/m1_nutthread_random-step-0.mp4` (528 KB).
+- `ffprobe`: `Duration 00:00:13.27, h264 yuv420p 1280x720, 15 fps`. 200 steps / 15 fps ≈ 13.27 s — matches.
+- 200 sim steps completed OK.
 
-| Path | Notes |
-|---|---|
-| Downgrade driver to a known-good Isaac Sim 5.1 version (e.g. 555.x) | Risk: may break other GPU-using code on this machine |
-| Upgrade Isaac Sim to 5.2 / latest (if a Blackwell fix has shipped) | Requires verifying IsaacLab 2.3.2 compatibility |
-| Use a non-RTX renderer (Storm / OpenGL hydra) for video frames | Worse quality, but enough for a sanity video |
-| Run video capture on a different machine (different GPU) | Most flexible, slowest workflow |
-| Skip video entirely for M1/M5b and just rely on reward curves + scalar metrics | Loses visual proof; not ideal for "see the policy threading" eval |
+**Citations (investigation):**
+- IsaacSim issue #537 — "fails with 595.79, works with 580"
+- Isaac Sim 5.1 docs — minimum driver 580.65.06
+- NVIDIA forum: RTX 5080 + Ubuntu 24.04 same `librtx.scenedb` segfault
+- Multiple Blackwell GPUs (5060 Ti / 5070 Ti / 5080 / 5090) report identical crash on driver 595.x
 
-**Impact on milestones:**
-- M1.1 video: deferred
-- M2: rl_games training itself does NOT need cameras (training runs headless without RTX renderer); only the `--video` flag for periodic clip dumps would be affected. Safe to proceed.
-- M5a: same as M2.
-- M5b eval video: blocked until renderer is fixed.
+**Residual risks (monitor):**
+- Warp `cuDeviceGetUuid` bug on driver 580 — workaround `WARP_DISABLE_CUDA=0` if it appears (IsaacLab #3477).
+- TiledCamera hang on Blackwell (IsaacLab #4951) — switch to `CameraCfg` instead of `TiledCameraCfg` if Factory tasks ever use tiled cams.
 
 ## Notes / warnings during run
 
