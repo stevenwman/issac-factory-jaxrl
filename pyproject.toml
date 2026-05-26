@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "IsaacLab Factory NutThread RL baseline with jax-learning algos"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "isaacsim==5.1.0",
     "torch==2.7.0",
     "torchvision==0.22.0",
 ]
