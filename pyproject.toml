@@ -20,6 +20,10 @@ dependencies = [
     "tensorflow-probability<0.25",
     "tensorstore>=0.1.40",
     "factory-jax",
+    "ml-collections>=1.0",
+    "mujoco>=3.3",
+    "playground>=0.2.0",
+    "numba<0.60",
 ]
 
 [[tool.uv.index]]
