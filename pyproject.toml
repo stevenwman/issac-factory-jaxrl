@@ -1,0 +1,21 @@
+[project]
+name = "isaaclab-factory-jax"
+version = "0.1.0"
+description = "IsaacLab Factory NutThread RL baseline with jax-learning algos"
+requires-python = ">=3.11,<3.12"
+dependencies = []
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+explicit = true
+
+[tool.uv.sources]
+torch       = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+isaacsim    = { index = "nvidia" }
