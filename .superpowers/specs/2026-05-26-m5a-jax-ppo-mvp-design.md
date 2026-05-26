@@ -1,54 +1,51 @@
-# M5a — JAX PPO MVP on FactoryJax-NutThread-v0
+# M5a — JAX PPO MVP on FactoryJax-NutThread-v0 (revised)
 
-**Status:** Draft
+**Status:** Draft (revised after scope reality-check)
 **Date:** 2026-05-26
 **Owner:** robomechanicslab@gmail.com
 **Parent spec:** `.superpowers/specs/2026-05-26-isaaclab-factory-jax-baseline-design.md`
-**Sub-spec scope:** narrows M5a (originally "matched JAX PPO vs rl_games comparison") into a smaller MVP that **proves the bridge + jax-learning's PPO can train on Isaac at all**. Full matched-config comparison is deferred.
+**Sub-spec scope:** narrows M5a (originally "matched JAX PPO vs rl_games comparison") into the **smallest deliverable that proves jax-learning's existing `train_ppo.py` can train on our wrapped Isaac env via a single new adapter file.**
+
+**Revision note:** initial draft mis-scoped this as "write our own training loop." After reading `jax_rl/training/env_bundle.py` and `env_backends/__init__.py`, jax-learning already has an `"isaaclab"` backend slot reserved — just unimplemented. The right move is to fill that slot, not to write a parallel trainer.
 
 ---
 
 ## 1. Goal
 
-Stand up an end-to-end training script that drives jax-learning's `PPO` on the `FactoryJax-NutThread-v0` env via our `JaxEnvWrapper`, and demonstrate that the resulting setup **learns** — i.e. reward rises above the random-policy baseline over a short training run.
+Implement the missing `isaaclab` backend for jax-learning's `EnvBundle` protocol, so that **jax-learning's stock `scripts/train_ppo.py` works against `FactoryJax-NutThread-v0` with only a CLI flag** (`--env IsaacLab/FactoryJax-NutThread-v0` or similar).
 
-This is the **first time** the full pipeline is exercised: bridge + jax-learning's algo + asymmetric actor-critic on a real Isaac env. The MVP confirms the plumbing works before we invest in matched-config rigor (the original M5a) or FlashSAC training (M5b).
+Success = reward rises during a short training run, observed live in wandb.
 
-## 2. Success criterion (single, narrow, self-contained)
+## 2. Success criterion
 
-**Mean episode reward at the final iteration is at least 2× the mean episode reward at iteration 0**, where both numbers are measured by the script itself during this run and logged to wandb. Iteration-0 reward is computed by rolling out the freshly-initialized (random) policy for one full rollout (`num_steps × num_envs` env-steps) before any PPO update fires; the final reward is the rolling mean over the last 10 iterations' episodes. Both numbers are written to `runs/m5a_jax_ppo_smoke/summary.json` at end of training.
+**Mean episode reward at the final iteration is at least 2× the mean episode reward at iteration 0**, measured by the training script itself and logged to wandb. Iteration 0 = the first PPO rollout (random policy from fresh init).
 
-No external baseline lookup. No comparison number against rl_games. Self-contained pass/fail.
+Self-contained pass/fail. No external baseline lookup. No matched config. No comparison number against rl_games.
 
 ## 3. Non-goals
 
-- Matched hyperparameter set with rl_games' `rl_games_ppo_cfg.yaml`. Use jax-learning sensible defaults.
-- Wall-clock comparison vs rl_games (parent spec's M5a Table). Defer.
-- Reaching M2's final reward number (809 @ ep 50). Defer.
-- Obs normalization (`RunningMeanStd`). Skip.
-- Eval cadence + best-checkpoint tracking. Skip — save final checkpoint only.
-- LSTM / recurrent policy. jax-learning PPO doesn't have it; use MLP-only.
-- Video recording during training. Defer to a separate play step.
-- Multi-seed / statistical comparison.
+- Writing a new training loop. **Use jax-learning's `scripts/train_ppo.py` unchanged.**
+- Matched hyperparameter set with rl_games. Use jax-learning defaults.
+- Eval cadence, best-ckpt tracking, video recording during training. (jax-learning's loop handles checkpointing; we accept whatever it does by default.)
+- Obs normalization toggles, LSTM/recurrent policy.
+- Multi-seed sweep.
 
 ## 4. Locked decisions
 
 | # | Decision | Source / grounding |
 |---|---|---|
-| D1 | MVP scope, not full matched-config comparison | User decision in M5a brainstorm |
-| D2 | Network: MLP [256, 128] elu actor + critic | jax-learning defaults; matches Factory rl_games MLP shape modulo the LSTM layer they prepend (which jax-learning lacks) |
-| D3 | Hyperparams: take from `jax_rl.configs.ppo_config.PPOConfig` defaults; override only `num_envs` and `num_steps` from CLI | Avoid debating each knob in MVP |
-| D4 | Asymmetric actor-critic: actor on `obs["policy"]` (19-dim), critic on `obs["critic"]` (43-dim) | Factory env structure confirmed in M1 |
-| D5 | Truncation handling: treat `terminated | truncated` as single `done` flag in GAE | Isaac doesn't separately signal truncation by default; differentiating would require env-cfg work out of scope for MVP |
-| D6 | No obs normalization | Simplifies bringup. Acceptable for MVP demonstration. Add later if reward stagnates. |
-| D7 | No periodic eval, no best-ckpt tracking | Wandb reward curve = the verification artifact. Final ckpt saved as `runs/m5a_jax_ppo_smoke/final.ckpt`. |
-| D8 | Wandb on. Project `isaaclab-factory-jax`, entity `sman2`, run name `m5a-jax-ppo-smoke-N` where N is a counter. `wandb.define_metric("*", step_metric="env_step")` so env_step is the x-axis everywhere. | User preference from M2 wandb discussion |
-| D9 | Inline mini-bundle (env, env_step closure, obs_dim, action_dim, critic_obs_dim, num_envs) — do NOT use `jax_rl.training.make_env_bundle` | `make_env_bundle` is Playground/MJX/gym-specific and would need adapter work. Defer. |
-| D10 | jax-learning consumed via `sys.path.insert(...)` (path-import, per parent spec); NOT installed editable | Per parent spec's M3.5 SKIP decision |
-| D11 | If jax-learning's PPO internals break under jax 0.5.3 (parent spec records the version downgrade from 0.9+), patch on a `jax-learning` topic branch `isaaclab-factory-jax/m5a-jax05-compat` and log in `docs/jax_learning_divergences.md` | Per parent spec D11 |
-| D12 | Single training run, single seed (seed=0). No multi-seed sweep. | MVP discipline |
-| D13 | num_envs: 64 (parent had 128; drop for MVP to leave GPU headroom for jax memory alongside Isaac's PhysX) | Parent spec Risk #4 + M2 actually-observed memory |
-| D14 | Total env-step budget: 500k (≈ 100-200 PPO iterations at num_envs=64, num_steps=128) — small enough to fit in ~30 min, large enough to see reward rise on a learnable env | NutThread learns within ~50 rl_games epochs ≈ 800k env-steps; halve for MVP |
+| D1 | MVP scope: reward rises, not matched comparison | User decision |
+| D2 | **Implement `isaaclab_backend` in OUR project** (`source/factory_jax/factory_jax/backend.py`), not in jax-learning. Register via `jax_rl.training.env_backends.register_backend("isaaclab", make_isaaclab_bundle)` at import time. | Lightweight-scope preference (memory `feedback-lightweight-scope`): avoids a long-lived jax-learning branch; our extension stays self-contained. Future merge upstream tracked as follow-up. |
+| D3 | Env name convention: `IsaacLab/FactoryJax-NutThread-v0` (matches `detect_backend` prefix at `env_backends/__init__.py:43`) | jax-learning's existing dispatch logic |
+| D4 | Use jax-learning's `scripts/train_ppo.py` **unmodified**. Invoke via our wrapper script `scripts/train_jax_ppo.py` which sys.path-inserts jax-learning, imports `factory_jax.backend` (triggers registration), then defers to jax-learning's `train()`. | Per spec D11: don't touch jax-learning's `main`. Our wrapper provides the registration hook + AppLauncher boot. |
+| D5 | AppLauncher boot order: AppLauncher → `import factory_jax.tasks` (register gym ID) → `import factory_jax.backend` (register backend) → call `jax_rl.scripts.train_ppo.train(cfg, seed)`. | pxr import constraint: isaaclab modules can only be imported AFTER AppLauncher init. |
+| D6 | num_envs: 64. Total env-step budget: 500k (~100-200 PPO iter at num_envs=64, num_steps=128). | MVP discipline + GPU memory headroom |
+| D7 | jax-learning PPO config: `get_preset(...)` or `PPOConfig()` default; override only `num_envs`. **No further tuning.** | Avoid hyperparam debate in MVP |
+| D8 | Asymmetric actor-critic: bundle declares `has_privileged=True`, `dict_obs=True`, `critic_obs_dim=43`. jax-learning's PPO already plumbs this via `train_ppo.py`'s `_extract_obs` helper (handles dict obs → policy + privileged_state split). **Our env returns dict with keys `policy` and `critic`; jax-learning's `_extract_obs` expects keys `state` and `privileged_state`.** Two options: (a) rename keys in bundle's `env_step` wrapper, (b) add a thin obs-key remap in our backend. We pick (a) — rename in env_step. | Read `train_ppo.py:43-49` for the expected keys. |
+| D9 | jax 0.5.3 compatibility risk (jax-learning was written against 0.9+). Patch jax-learning ONLY on branch `isaaclab-factory-jax/m5a-jax05-compat` if hit at runtime. Record in `docs/jax_learning_divergences.md`. | Per parent spec D11 |
+| D10 | Seed: 0. Single training run. | MVP discipline |
+| D11 | Wandb on. Project `isaaclab-factory-jax`, entity `sman2`, name `m5a-jax-ppo-mvp-<timestamp>`. jax-learning's `train_ppo.py` already does wandb plumbing — pass `use_wandb=True`. | Parent spec wandb conventions |
+| D12 | Future upstream: when jax-learning maintainer adds an official isaaclab backend, deprecate our `backend.py`. Until then, ours is the only one. | Long-term hygiene |
 
 ## 5. Architecture
 
@@ -57,99 +54,113 @@ No external baseline lookup. No comparison number against rl_games. Self-contain
 ```
 Research/isaaclab-factory-jax/
 ├── scripts/
-│   └── train_jax_ppo.py          ← CREATE (new)
+│   └── train_jax_ppo.py            ← CREATE (~40 lines: AppLauncher + registration hooks + delegate to jax-learning's train_ppo.train)
 ├── source/factory_jax/factory_jax/
-│   ├── tasks.py                   (existing, unchanged)
-│   └── bridge/                    (existing, unchanged)
+│   └── backend.py                  ← CREATE (~120 lines: make_isaaclab_bundle, register at import)
 └── docs/
-    └── jax_learning_divergences.md  ← CREATE on first divergence (lazy)
+    └── jax_learning_divergences.md ← CREATE only if D9 triggers
 ```
 
-### Script structure
+**No new training loop. No new RolloutBuffer. No new GAE.** All that lives in jax-learning, unchanged.
+
+### `backend.py` (the meat — one new file)
+
+Conforms to the builder protocol per `env_backends/__init__.py`:
 
 ```python
-# 1. AppLauncher boot (must come first)
-# 2. sys.path insert for jax-learning + import factory_jax.tasks
-# 3. gym.make + JaxEnvWrapper
-# 4. Construct PPO(config, obs_dim=19, action_dim=6, ..., critic_obs_dim=43)
-# 5. wandb.init + define_metric(env_step)
-# 6. Training loop:
-#    for iter in range(num_iterations):
-#        rollout: collect num_steps × num_envs transitions into a RolloutBatch
-#        ppo.update(state, batch, key, next_obs, critic_obs, critic_next_obs)
-#        wandb.log({reward, losses, perf}, step=env_step)
-# 7. Save final ckpt + close env
+def make_isaaclab_bundle(cfg: TrainConfig, seed: int) -> EnvBundle:
+    """Build EnvBundle for an IsaacLab env. cfg.env_name must be 'IsaacLab/<task-id>'."""
+    # 1. Resolve task ID
+    task_id = cfg.env_name.removeprefix("IsaacLab/")  # e.g. "FactoryJax-NutThread-v0"
+
+    # 2. AppLauncher must already be running (handled by caller, scripts/train_jax_ppo.py)
+    import gymnasium as gym
+    import factory_jax.tasks  # noqa: F401  (registers FactoryJax-* gym IDs)
+    from factory_jax.bridge.jax_env_wrapper import JaxEnvWrapper
+    from isaaclab_tasks.utils import parse_env_cfg
+
+    # 3. Make wrapped env
+    env_cfg = parse_env_cfg(task_id, device="cuda:0", num_envs=cfg.num_envs)
+    raw_env = gym.make(task_id, cfg=env_cfg)
+    env = JaxEnvWrapper(raw_env)
+
+    # 4. env_step closure: jax-learning's onpolicy_collect expects a step fn
+    def env_step(state, action):
+        obs, reward, terminated, truncated, info = env.step(action)
+        # Rename obs keys to what jax-learning's _extract_obs expects
+        obs = {"state": obs["policy"], "privileged_state": obs["critic"]}
+        return obs, reward, terminated, truncated, info
+
+    # 5. Initial obs
+    obs0, _ = env.reset(seed=seed)
+    obs0 = {"state": obs0["policy"], "privileged_state": obs0["critic"]}
+
+    # 6. eval_env: same env for MVP (no separate eval). Defer eval rigor.
+    return EnvBundle(
+        env=env, env_step=env_step, env_state=obs0, eval_env=env,
+        obs_dim=19, action_dim=6, critic_obs_dim=43,
+        has_privileged=True, dict_obs=True,
+        key=jax.random.PRNGKey(seed),
+        backend_kind="isaaclab", num_envs=cfg.num_envs,
+    )
+
+register_backend("isaaclab", make_isaaclab_bundle)
 ```
 
-### Three "units" inside the script
+### `scripts/train_jax_ppo.py` (the wrapper)
 
-- **mini-bundle** (lines ~50): inline closure that mimics what `make_env_bundle` would have returned. One function, ~30 lines.
-- **rollout collector** (~40 lines): vectorized step loop that fills a `RolloutBatch` with policy obs, critic obs, actions, log-probs, rewards, dones. Asymmetric — stores both obs streams in parallel arrays.
-- **train loop** (~50 lines): instantiate PPO, build optimizers, run iterations, log to wandb, save final ckpt.
-
-If any of these grows past its budget, split into a helper file. For MVP, keep one file.
-
-## 6. Data flow per iteration
-
-```
-                ┌──────────────────────┐
-                │  jax PRNG key         │
-                └───────────┬──────────┘
-                            ▼
-              ppo.select_action(state, policy_obs, key, critic_obs)
-                            │  → (action, log_prob, value)
-                            ▼
-              JaxEnvWrapper.step(action)   ── DLPack ── Isaac.step(torch_action)
-                            │  → ({"policy": obs_p, "critic": obs_c}, reward, term, trunc, info)
-                            ▼
-              accumulate into rollout buffer for num_steps
-                            │
-                            ▼
-              compute (or let PPO compute internally) GAE advantages
-                            ▼
-              ppo.update(state, batch, key, next_obs, critic_obs, critic_next_obs)
-                            │  → (new_state, train_info)
-                            ▼
-              wandb.log({reward/mean, losses/*, perf/*}, step=env_step)
+```python
+# 1. argparse + AppLauncher boot
+# 2. sys.path.insert for jax-learning
+# 3. import factory_jax.tasks    # gym.register
+# 4. import factory_jax.backend  # register_backend("isaaclab", ...)
+# 5. Build TrainConfig with env_name="IsaacLab/FactoryJax-NutThread-v0"
+# 6. Call jax_rl.scripts.train_ppo.train(cfg, seed, use_wandb=True)
 ```
 
-env_step counter ticks `num_envs * num_steps` per iteration.
+Total: ~40 lines, no training logic of our own.
+
+## 6. Data flow
+
+Identical to jax-learning's existing PPO flow. The bundle's `env_step` is the only Isaac-specific call site. Everything downstream (rollout, GAE, PPO update, wandb logging, checkpointing) is jax-learning's stock code.
 
 ## 7. Risks + mitigations
 
-| # | Risk | Mitigation / fallback |
+| # | Risk | Mitigation |
 |---|---|---|
-| R1 | jax 0.5 vs 0.9 API gap inside jax-learning's PPO breaks at runtime | First fix attempt: patch the call site on a topic branch in jax-learning (per D11). If breakage is too pervasive, escalate: bump our `pyproject.toml` numpy override to `numpy>=2` and try `jax[cuda12]>=0.9` again. |
-| R2 | Reward doesn't rise — flat training | Investigate in order: (a) inspect rollout obs/reward distributions, (b) enable obs normalization, (c) lower lr, (d) inspect action distribution, (e) sanity-check that PPO sees the right shapes. If still flat, M5a fails; escalate. |
-| R3 | Isaac OOM on shared GPU when jax also runs there | num_envs=64 by default. Drop to 32 if needed. Document. |
-| R4 | DLPack contiguous-guard catches an obs we didn't expect to be non-contiguous (Factory env may return strided slices) | `to_jax` already calls `.contiguous()`. If we see perf issues, profile + investigate. |
-| R5 | Wall-clock per iter dominated by Isaac, not algo | Acceptable — MVP doesn't try to beat rl_games on speed. Just verify learning. |
-| R6 | jax-learning's PPO expects a `next_obs` shape we don't readily have at iteration boundary | The rollout collector keeps the last obs from the iteration as `next_obs`. Standard PPO pattern. |
-| R7 | Asymmetric obs shape mismatch — critic obs not propagated through wrapper | Bridge already preserves dict; wrapper test (`test_wrapper_reset_returns_jax_dict`) verifies. Re-verify by printing shapes in the smoke run. |
+| R1 | jax 0.5 API gap inside jax-learning's PPO breaks at runtime | Patch on branch `isaaclab-factory-jax/m5a-jax05-compat` in jax-learning. Log in `docs/jax_learning_divergences.md`. |
+| R2 | `EnvBundle.env_step` signature jax-learning expects doesn't match what I sketched in §5 | Read `onpolicy_collect.py` first thing in plan phase before writing backend.py |
+| R3 | jax-learning's `train_ppo.train()` may not accept all args we need (e.g. `use_wandb`) — its signature is fixed | Read `scripts/train_ppo.py:67` (`def train(...)`) signature first. Add a thin shim in our wrapper if needed. |
+| R4 | jax-learning's `_extract_obs` expects `obs["state"]` + `obs["privileged_state"]`, but we have `policy`+`critic`. Bundle's env_step closure remaps these. | D8 — already designed |
+| R5 | Reward doesn't rise | Investigate: (a) inspect rollouts (b) try obs norm in jax-learning's cfg (c) lower lr (d) check that action is being fed correctly through bridge |
+| R6 | Isaac OOM with num_envs=64 + jax memory on same GPU | Drop to 32, document |
+| R7 | jax-learning may import a non-existent module at top of `train_ppo.py` (e.g. `mujoco_playground`) that we don't have | uv add the missing dep, or stub-out the import — minor friction |
 
 ## 8. Verification checkpoints
 
 | When | Pass condition | If fail |
 |---|---|---|
-| Script imports + AppLauncher boots + env loads | No exception, FactoryJax-NutThread-v0 registered | Investigate import order / EULA env var |
-| First rollout collected | `RolloutBatch.obs.shape == (num_steps, num_envs, 19)`, no NaN, reward field populated | Print shapes, dtype check, ensure JAX arrays not Python floats |
-| First `ppo.update` returns | TrainingState updated, info dict non-empty, no NaN losses | This is most likely R1 failure mode. Patch via D11. |
-| 5 iterations complete | wandb dashboard live, reward + losses logged with env_step axis | Check wandb auth + `define_metric` calls |
-| Final iteration (~100 PPO iters) | Mean episode reward > 2× random baseline | This is the deliverable. If fail, R2 mitigation. |
+| `import factory_jax.backend` succeeds (post-AppLauncher) | `"isaaclab" in BACKEND_BUILDERS` | Check registration call |
+| Bundle constructed | `EnvBundle.backend_kind == "isaaclab"`, obs/action dims match, env_state is dict with `state`+`privileged_state` keys | Trace `make_isaaclab_bundle` output |
+| First rollout collected by jax-learning's onpolicy_collect | No exception, no NaN | This is most likely failure point — R2/R4 mitigation |
+| First `ppo.update` returns | TrainingState updated, info dict non-empty | R1 mitigation |
+| 10 iterations complete | wandb live, reward + losses streaming | Check wandb auth |
+| Final iteration (~100 PPO iters at 500k env-steps budget) | Mean ep reward at last iter ≥ 2× mean ep reward at iter 0 | R5 mitigation |
 
-## 9. Open questions — **MUST be resolved as the FIRST plan task** before any rollout-collector code is written. These determine the rollout collector's shape and interface.
+## 9. Open questions — MUST be resolved as the first plan task before writing backend.py
 
-- **Q1 (blocking — shapes rollout collector):** Does `jax_rl.algos.ppo.PPO.update` compute GAE internally, or does the caller need to provide `advantages` in the batch? If internal: collector stores raw `rewards`, `dones`, `values`. If external: collector must also compute bootstrapped advantages and pass them in. Resolve by reading `jax_rl/algos/ppo.py` line 273 onward + `jax_rl/buffers/rollout_buffer.py`.
-- **Q2 (blocking — shapes rollout collector):** Does jax-learning's `RolloutBuffer` support asymmetric `critic_obs` storage? If yes: use it. If no: hand-roll a parallel `critic_obs` array (shape `(num_steps, num_envs, 43)`) outside the buffer and pass to `ppo.update(critic_obs=...)`. Resolve by reading `jax_rl/buffers/rollout_buffer.py` + `RolloutBatch` dataclass.
-- **Q3 (non-blocking — affects reset semantics):** Isaac may auto-reset dones via the `DirectRLEnv` mechanism (Factory probably does) or require an explicit reset call. Verify by reading `factory_env.py` or empirically. Most likely auto-reset is on and we never call `env.reset()` mid-training. Has no impact on code structure if assumed auto-reset.
+- **Q1 (blocking):** What is `EnvBundle.env_step`'s exact signature expected by `onpolicy_collect`? (state, action) → ? Need to read `jax_rl/training/onpolicy_collect.py` for the iteration loop. Determines whether we return 5-tuple, dict, etc.
+- **Q2 (blocking):** What's `jax_rl.scripts.train_ppo.train()`'s signature? Need to call it correctly from our wrapper. Read the signature + figure out which args we need to pass (cfg, seed, use_wandb=True/False, wandb_project=..., etc.).
+- **Q3 (non-blocking):** Does jax-learning's `train_ppo.train()` import anything Playground-specific at module-load time (e.g. `mujoco_playground` registry queries)? If yes, may need a stub or uv-installed dep. Resolve empirically by running the wrapper script.
 
 ## 10. Out-of-scope follow-ups
 
-- **Full M5a per parent spec**: matched hyperparameters, equal env-step budget, wall-clock & sample-efficiency table comparing rl_games vs jax-learning PPO. Open as a separate sub-spec **after** MVP passes.
-- **M5b FlashSAC**: parent spec's primary deliverable. Sub-spec to be written after M5a MVP.
-- **Obs normalization** (`RunningMeanStd`): add if MVP reward plateaus too early.
+- **Full M5a per parent spec**: matched hyperparams + comparison doc. Open as separate sub-spec after MVP passes.
+- **M5b FlashSAC**: parent spec's primary deliverable. Should work with the SAME `isaaclab_backend.py` since it's algo-agnostic — that's the win of this design. Sub-spec to be written after M5a MVP.
+- **Upstream backend.py to jax-learning**: when MVP is stable, open a PR to jax-learning that moves `backend.py` from our project into `jax_rl/training/env_backends/isaaclab_backend.py`. Per D12.
+- **Eval cadence + best-ckpt tracking + render_fn**: backend currently passes `eval_env=env` (same) and `render_fn=None`. Add proper eval env + render function in follow-up.
 
-## 11. Glossary delta from parent spec
+## 11. Glossary delta
 
-- **MVP** here means "minimum proof that the pipeline trains end-to-end," NOT "minimum viable product to ship." Internal-only term for this sub-spec.
-- **Mini-bundle** = inline-constructed dict/closure that takes the place of `jax_rl.training.make_env_bundle` for our Isaac env.
+- **EnvBundle**: jax-learning's backend-agnostic env handle, see `jax_rl/training/env_bundle.py`.
+- **`IsaacLab/<task-id>`** env_name prefix: jax-learning's dispatch convention (`env_backends/__init__.py:43`).
