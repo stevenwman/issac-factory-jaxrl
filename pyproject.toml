@@ -24,6 +24,12 @@ dependencies = [
     "mujoco>=3.3",
     "playground>=0.2.0",
     "numba<0.60",
+    "isaacsim-extscache-kit==5.1.0.0",
+    "isaacsim-extscache-kit-sdk==5.1.0.0",
+    "isaacsim-extscache-physics==5.1.0.0",
+    "isaacsim-app==5.1.0.0",
+    "isaacsim-core==5.1.0.0",
+    "wandb>=0.26.1",
 ]
 
 [[tool.uv.index]]
@@ -64,4 +70,7 @@ override-dependencies = [
     "starlette<0.46.0",
     "flatdict>=4.1.0",
     "jax[cuda12]<0.9.0",
+    # isaacsim 5.1.0 declares pywin32 unconditionally; only resolves on Windows.
+    # Constrain to win32 so Linux resolution skips it.
+    'pywin32 ; sys_platform == "win32"',
 ]

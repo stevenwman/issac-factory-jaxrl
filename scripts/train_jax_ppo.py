@@ -72,7 +72,15 @@ cfg = dataclasses.replace(
 if hasattr(cfg, "handle_truncation") and not cfg.handle_truncation:
     cfg = dataclasses.replace(cfg, handle_truncation=True)
 
+# Silence jax DEBUG spam (not useful, clutters log)
+import logging
+logging.getLogger("jax").setLevel(logging.WARNING)
+
 # === Run training ===
+# IMPORTANT: print exception trace BEFORE simulation_app.close(), because Isaac's
+# headless shutdown can hang on get_timeline_interface (observed in M5a smoke).
+# A hung close() with no traceback printed first hides the real failure.
+import traceback
 try:
     train(
         cfg,
@@ -80,6 +88,12 @@ try:
         use_wandb=args_cli.wandb,
         wandb_project="isaaclab-factory-jax",
     )
+except Exception:
+    print("=" * 80, flush=True)
+    print("TRAINING RAISED:", flush=True)
+    traceback.print_exc()
+    print("=" * 80, flush=True)
 finally:
-    # D17: clean Isaac shutdown regardless of training outcome
+    # D17: clean Isaac shutdown (may hang on shutdown — known kit bug, log captures
+    # the train traceback above regardless).
     simulation_app.close()
